@@ -45,15 +45,11 @@ _LOGGER = logging.getLogger(__name__)
 SERVICE_ALARM_ARM_AUTOMATIC = "alarm_arm_automatic"
 ATTR_MODE = "mode"
 ATTR_CODE = "code"
-ATTR_SKIP_EXIT_DELAY = "skip_exit_delay"
-ATTR_IGNORE_STAY_NO_EXIT = "ignore_stay_no_exit"
 
 SERVICE_ALARM_ARM_AUTOMATIC_SCHEMA = cv.make_entity_service_schema(
     {
         vol.Required(ATTR_MODE): vol.In(("away", "home")),
         vol.Required(ATTR_CODE): cv.string,
-        vol.Optional(ATTR_SKIP_EXIT_DELAY, default=False): cv.boolean,
-        vol.Optional(ATTR_IGNORE_STAY_NO_EXIT, default=False): cv.boolean,
     }
 )
 
@@ -200,12 +196,6 @@ async def _async_handle_alarm_arm_automatic(
     """Handle the Elke27 automation arming service."""
     mode_name = call.data[ATTR_MODE]
     code = call.data[ATTR_CODE]
-    skip_exit_delay = call.data[ATTR_SKIP_EXIT_DELAY]
-    ignore_stay_no_exit = call.data[ATTR_IGNORE_STAY_NO_EXIT]
-
-    if ignore_stay_no_exit and mode_name != "away":
-        msg = "`ignore_stay_no_exit` is only valid with `mode: away`"
-        raise ServiceValidationError(msg)
 
     entity_ids = _entity_ids_from_service_call(hass, call)
     if not entity_ids:
@@ -218,8 +208,6 @@ async def _async_handle_alarm_arm_automatic(
             entity_id,
             mode_name,
             code,
-            skip_exit_delay=skip_exit_delay,
-            ignore_stay_no_exit=ignore_stay_no_exit,
         )
 
 
@@ -234,9 +222,6 @@ async def _async_arm_automatic_entity(
     entity_id: str,
     mode_name: str,
     code: str,
-    *,
-    skip_exit_delay: bool,
-    ignore_stay_no_exit: bool,
 ) -> None:
     """Handle the automatic arming service for one entity."""
     entity_entry = er.async_get(hass).async_get(entity_id)
@@ -265,8 +250,8 @@ async def _async_arm_automatic_entity(
         _area_id_from_unique_id(entity_entry.unique_id),
         _service_mode_to_arm_mode(mode_name),
         code,
-        auto_stay_cancel=ignore_stay_no_exit,
-        exit_delay_cancel=skip_exit_delay,
+        auto_stay_cancel=True,
+        exit_delay_cancel=True,
     )
 
 
