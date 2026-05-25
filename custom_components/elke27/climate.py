@@ -193,9 +193,7 @@ class Elke27Thermostat(
         if tstat is None:
             return None
         heat_setpoint = getattr(tstat, "heat_setpoint", None)
-        if isinstance(heat_setpoint, int | float):
-            return float(heat_setpoint)
-        return None
+        return _normalize_temperature(heat_setpoint)
 
     @property
     def target_temperature_high(self) -> float | None:
@@ -204,9 +202,7 @@ class Elke27Thermostat(
         if tstat is None:
             return None
         cool_setpoint = getattr(tstat, "cool_setpoint", None)
-        if isinstance(cool_setpoint, int | float):
-            return float(cool_setpoint)
-        return None
+        return _normalize_temperature(cool_setpoint)
 
     @property
     def fan_mode(self) -> str | None:
