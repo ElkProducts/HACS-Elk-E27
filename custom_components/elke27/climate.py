@@ -24,6 +24,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import Elke27DataUpdateCoordinator
 from .entity import build_unique_id, device_info_for_entry, sanitize_name, unique_base
+from .temperature import encode_temperature_setpoint, normalize_temperature
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -57,7 +58,6 @@ _TSTAT_TO_FAN_MODE: dict[str, str] = {
     "AUTO": FAN_AUTO,
     "ON": FAN_ON,
 }
-_IMPLIED_DECIMAL_TEMP_THRESHOLD = 200
 
 
 async def async_setup_entry(
@@ -184,7 +184,7 @@ class Elke27Thermostat(
         if tstat is None:
             return None
         temperature = getattr(tstat, "temperature", None)
-        return _normalize_temperature(temperature)
+        return normalize_temperature(temperature)
 
     @property
     def target_temperature_low(self) -> float | None:
@@ -193,7 +193,7 @@ class Elke27Thermostat(
         if tstat is None:
             return None
         heat_setpoint = getattr(tstat, "heat_setpoint", None)
-        return _normalize_temperature(heat_setpoint)
+        return normalize_temperature(heat_setpoint)
 
     @property
     def target_temperature_high(self) -> float | None:
@@ -202,7 +202,7 @@ class Elke27Thermostat(
         if tstat is None:
             return None
         cool_setpoint = getattr(tstat, "cool_setpoint", None)
-        return _normalize_temperature(cool_setpoint)
+        return normalize_temperature(cool_setpoint)
 
     @property
     def fan_mode(self) -> str | None:
@@ -247,11 +247,11 @@ class Elke27Thermostat(
         if ATTR_TARGET_TEMP_LOW in kwargs:
             low = kwargs[ATTR_TARGET_TEMP_LOW]
             if isinstance(low, int | float):
-                heat_setpoint = round(low)
+                heat_setpoint = encode_temperature_setpoint(low)
         if ATTR_TARGET_TEMP_HIGH in kwargs:
             high = kwargs[ATTR_TARGET_TEMP_HIGH]
             if isinstance(high, int | float):
-                cool_setpoint = round(high)
+                cool_setpoint = encode_temperature_setpoint(high)
 
         if heat_setpoint is None and cool_setpoint is None:
             msg = "At least one target temperature is required."
@@ -299,13 +299,3 @@ def _get_tstat(snapshot: Any, tstat_id: int) -> Any | None:
         if entity_id == tstat_id:
             return tstat
     return None
-
-
-def _normalize_temperature(value: Any) -> float | None:
-    """Normalize thermostat temperatures to display units."""
-    if not isinstance(value, int | float):
-        return None
-    # Some panels report temperature with one implied decimal place.
-    if abs(value) >= _IMPLIED_DECIMAL_TEMP_THRESHOLD:
-        return float(value) / 10.0
-    return float(value)
