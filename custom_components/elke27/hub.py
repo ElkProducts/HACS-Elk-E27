@@ -42,8 +42,10 @@ from .arming import (  # noqa: F401  # re-exported from hub for compatibility (D
     _validated_pin,
     _zone_with_status_char,
     area_armed_from_status_reply,
+    area_arming_from_status_reply,
     area_faulted_zones,
     area_is_armed,
+    area_skip_automatic_arm_from_status_reply,
     is_already_armed_refusal,
     is_definitive_refusal,
     snapshot_with_status,
@@ -250,8 +252,8 @@ class Elke27Hub:
         command replies at all. Each request is sent once; if one fails, that
         part falls back to the client snapshot for zone data only.
 
-        The second value is whether area_get_status reported armed (True/False),
-        or None when that request failed.
+        The second value is whether the area_get_status reply reported armed or
+        exit-delay arming (True/False), or None when that request failed.
         """
         return await self._async_area_state_snapshot(area_id, include_zones=True)
 
@@ -278,7 +280,7 @@ class Elke27Hub:
         snapshot = snapshot_with_status(
             client.get_snapshot(), area_id, area_payload, zones_payload
         )
-        return snapshot, area_armed_from_status_reply(area_payload)
+        return snapshot, area_skip_automatic_arm_from_status_reply(area_payload)
 
     async def async_poll_until_area_armed(
         self,
@@ -287,10 +289,10 @@ class Elke27Hub:
         gate: Callable[[], Awaitable[None]] | None = None,
     ) -> tuple[PanelSnapshot | None, bool]:
         """
-        Poll area_get_status until the panel reports armed or the timeout elapses.
+        Poll area_get_status until the panel reports armed or exit delay arming.
 
-        A failed read is not armed and polling continues. Return the last snapshot
-        and whether a reply showed armed before the timeout.
+        A failed read does not skip and polling continues. Return the last snapshot
+        and whether a reply showed armed or arming before the timeout.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + ARM_STATUS_POLL_TIMEOUT
@@ -298,8 +300,8 @@ class Elke27Hub:
         while True:
             if gate is not None:
                 await gate()
-            last, armed = await self.async_refresh_area_arm_status(area_id)
-            if armed is True:
+            last, skip = await self.async_refresh_area_arm_status(area_id)
+            if skip is True:
                 return last, True
             if loop.time() >= deadline:
                 return last, False
