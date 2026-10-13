@@ -284,15 +284,31 @@ There is no reconfigure option, and the integration doesn't follow a panel to a 
 on its own: reconnects use the stored address. **Give the panel a DHCP reservation** so its
 address never changes.
 
-If the address does change:
+If the address does change, re-linking can't help: it reuses the stored host and port. What
+to do depends on whether the integration knows the panel's MAC address. It learns the MAC from
+network discovery, either during setup or, for entries added before 0.1.8.x, on the first
+connect after upgrading.
+
+**The MAC is known:**
 
 1. Go to **Settings → Devices & services → Add integration → Elk E27 Alarm Engine
    Integration → Manual setup**.
 2. Enter the **new** host, plus the access code and passphrase.
-3. The panel is recognized by its MAC address. The existing entry's address is updated in
-   place, and setup ends with *"This panel is already configured."*
+3. The integration asks the panel at the new address for its MAC. When it matches, the
+   existing entry's address is updated in place, and setup ends with *"This panel is already
+   configured."* Nothing is deleted, and your entities are kept.
 
-Nothing needs to be deleted, and your entities are kept.
+**The MAC isn't known** (the panel never answered discovery), or the panel at the new address
+doesn't answer discovery: the new address counts as a new panel.
+
+> **Delete the old entry first.** Adding the panel at the new address without deleting it
+> leaves two entries for the same panel.
+
+1. Delete the integration entry (**Settings → Devices & services → Elk E27 Alarm Engine
+   Integration → ⋮ → Delete**).
+2. Add the integration again at the **new** host, with the access code and passphrase.
+3. Entity IDs may change. Update automations, scripts and dashboards, or rename the new
+   entities back to the old IDs.
 
 ### Re-linking (reauthentication)
 
@@ -647,8 +663,9 @@ These are problems that are tracked for a fix.
   setup.)
 - **Fire, CO and water zones show as generic openings**, not smoke, CO or moisture sensors.
 - **Address changes:** after the panel's IP address changes, reconnects keep using the old
-  address. Use a DHCP reservation, or run Manual setup again with the new address (see
-  [Changing the panel's address](#changing-the-panels-address)).
+  address. Use a DHCP reservation. If the integration knows the panel's MAC, run Manual setup
+  at the new address to update the entry in place; otherwise delete the old entry first, then add it again (adding without deleting leaves
+  two entries for the same panel; see [Changing the panel's address](#changing-the-panels-address)).
 - **Occasional dropped connection during thermostat traffic.** The integration reconnects
   by itself. Entities may be briefly unavailable.
 
@@ -699,7 +716,7 @@ to retry (see [the example](#retry-automatic-arming-after-a-failure)).
 | *Unable to authenticate with the panel…* | The access code and passphrase are correct. These are the linking credentials set by your installer, not your alarm code. Confirm them with your installer if in doubt. |
 | *The panel requires linking…* | Enter the access code and passphrase again. |
 | *No panels were discovered…* | The panel is online and on the same network segment, and UDP broadcast on port 2362 isn't blocked. Otherwise use **Manual setup**. |
-| *This panel is already configured.* | The panel (matched by MAC address) already has an entry. |
+| *This panel is already configured.* | The panel already has an entry, matched by MAC address, or by the panel's serial number when it reports a real one, or, if neither is reported, by the same host and port. |
 
 ### Panel error messages
 
