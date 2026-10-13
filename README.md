@@ -194,7 +194,7 @@ or `Zone 12` is used.
 
 | Integration | `elke27` library | Home Assistant tested | Panel tested |
 |---|---|---|---|
-| 0.1.8 | 0.3.11 | Hardware: 2026.10.0; CI: 2026.1.3 (minimum 2026.1.0) | Tested: firmware 0.0.6.4, hardware 0.0.1.4, bootloader 0.0.2.24 |
+| 0.1.8 (draft) | [0.3.12](https://pypi.org/project/elke27/0.3.12/) | Hardware: 2026.10.0; CI: 2026.1.3 (minimum 2026.1.0) | Tested: firmware 0.0.6.4, hardware 0.0.1.4, bootloader 0.0.2.24 |
 | 0.1.7 | 0.3.11 | Hardware: 2026.10.0; CI: 2026.1.3 (minimum 2026.1.0) | Tested: firmware 0.0.6.4, hardware 0.0.1.4, bootloader 0.0.2.24 |
 | 0.1.6 | 0.3.10 | 2026.1.3, 2026.10.0 (minimum 2026.1.0) | Tested: firmware 0.0.6.4, hardware 0.0.1.4, bootloader 0.0.2.24 |
 
@@ -305,9 +305,9 @@ reloads with new link keys. Your entities and their IDs stay the same. Re-linkin
 refreshes the link keys for the stored address; to change the address, see
 [Changing the panel's address](#changing-the-panels-address).
 
-If the keys are rejected while **reconnecting**, no notice appears: the integration stops
-retrying and entities stay unavailable. **Reload the integration** (or restart Home
-Assistant) to get the reauthentication notice.
+If the keys are rejected while **reconnecting**, the integration stops retrying and starts the
+**reauthentication** flow once, so the notice appears. Entities stay unavailable until you
+re-link (or reload the integration).
 
 ---
 
@@ -650,8 +650,6 @@ These are problems that are tracked for a fix.
 - **Address changes:** after the panel's IP address changes, reconnects keep using the old
   address. Use a DHCP reservation, or run Manual setup again with the new address (see
   [Changing the panel's address](#changing-the-panels-address)).
-- **No reauthentication prompt on reconnect:** if the link keys are rejected while
-  reconnecting, entities stay unavailable with no notice. Reload the integration.
 - **Occasional dropped connection during thermostat traffic.** The integration reconnects
   by itself. Entities may be briefly unavailable.
 
@@ -876,18 +874,23 @@ whole °F, so setpoints you set in °C are rounded.
 Remove each Elk E27 config entry under **Settings → Devices & services**, then add the panel
 again with the same linking credentials.
 
-- **Config entry `unique_id`** uses **formatted panel MAC** when the panel reports one, otherwise
-  the panel’s own **hardware serial** (when present). If the panel reports **neither MAC nor
-  serial** (as on some hardware today), `unique_id` stays **unset**, the entry is deduplicated by
-  **host and port** only, and devices and entities use the **config entry id** as their identity
-  until a later release adds a stronger panel identifier. **Changing the panel’s IP address** in
-  that case is treated as a new panel: delete the entry and add it again at the new host.
+- Entity unique IDs and device identifiers follow the panel **MAC address** when the panel
+  reports one, otherwise the panel **hardware serial**, otherwise the **config entry ID**.
+  **Panels today:** the panel's own messages carry no MAC, and current firmware reports a
+  placeholder serial, which is ignored. The MAC seen during network discovery is not used for
+  identity in 0.1.8. Without a MAC or real serial, the config entry
+  **`unique_id` stays unset**, setup dedupes
+  on **host:port**, and devices and entities are keyed on the **config entry ID**. An IP change
+  counts as a new panel: **re-link can't change the address** (it reuses stored host and port),
+  so delete the entry and add it again at the new address.
 - The integration serial used for E27 linking identifies Home Assistant, not the panel, and is
   never used as config or entity identity.
-- **Entity unique IDs and entity IDs may change** (devices, entities, and automations that
-  referenced the old IDs or the integration serial as an entity base will need updating).
-- Dashboards, automations, and scripts that target Elk E27 entities should be reviewed after
-  re-adding.
+- **Entity unique IDs and entity IDs may change**; review dashboards, automations, and scripts
+  after re-adding.
+- **Requires** [elke27 0.3.12](https://pypi.org/project/elke27/0.3.12/) ([release notes](https://github.com/mitchmitchell/elke27/releases/tag/v0.3.12)) (#54). Reconnect policy (#53): auth failures
+  during automatic reconnect start re-link once; three non-transport failures since the last
+  successful connect (transport failures in between do not reset the count) can raise a
+  **`reconnect_failed`** Repairs issue while retry continues.
 
 ### To 0.1.7
 
