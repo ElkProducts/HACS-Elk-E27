@@ -883,6 +883,13 @@ whole °F, so setpoints you set in °C are rounded.
 
 ## Upgrading
 
+### To 0.1.9
+
+Mostly internal cleanup (typed snapshots, strict typing). **No breaking changes compared with
+0.1.8.1** (same legacy `pin` cleanup on setup as 0.1.8). Upgrading from **0.1.7** straight to
+0.1.9: follow **To 0.1.8** below (delete and re-add; config entry, device, and entity identity
+change — see 0.1.8 breaking changes).
+
 ### To 0.1.8.1
 
 **Upgrading from 0.1.7:** delete each Elk E27 entry first, then install 0.1.8.1 and add the
