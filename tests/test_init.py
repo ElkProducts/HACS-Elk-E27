@@ -261,19 +261,24 @@ async def test_unload_platform_failure_keeps_client(
         assert not await hass.config_entries.async_unload(mock_config_entry.entry_id)
     assert mock_config_entry.state is ConfigEntryState.FAILED_UNLOAD
     mock_client.client.async_disconnect.assert_not_awaited()
-    hub = mock_config_entry.runtime_data.hub
+    hub = mock_config_entry.runtime_data.coordinator
     assert hub.client is mock_client.client
 
 
 async def test_setup_failure_after_connect_disconnects(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, mock_client: ClientHarness
 ) -> None:
-    """A failure after connecting still disconnects the client."""
+    """
+    An unexpected failure after connecting still disconnects the client.
+
+    The coordinator's first refresh handles unexpected errors itself (setup is
+    retried); the integration adds no catch-all of its own.
+    """
     mock_client.client.async_refresh_csm.side_effect = RuntimeError("boom")
     mock_config_entry.add_to_hass(hass)
     assert not await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
-    assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
     mock_client.client.async_disconnect.assert_awaited()
 
 
@@ -289,7 +294,7 @@ def _reconnect_issue_id(entry_id: str) -> str:
     return f"{ISSUE_RECONNECT_FAILED}_{entry_id}"
 
 
-HUB_LOGGER = "custom_components.elke27.hub"
+HUB_LOGGER = "custom_components.elke27.coordinator"
 
 
 def _reconnect_failure_log_records(
@@ -377,18 +382,17 @@ async def test_setup_auth_errors_start_reauth(
     assert flows[0]["context"]["entry_id"] == mock_config_entry.entry_id
 
 
-@pytest.mark.parametrize("link_keys_json", ["", "not a link key mapping"])
 async def test_setup_bad_link_keys_start_reauth(
-    hass: HomeAssistant, mock_client: ClientHarness, link_keys_json: str
+    hass: HomeAssistant, mock_client: ClientHarness
 ) -> None:
-    """Missing or unreadable stored link keys start reauth without connecting."""
+    """Unreadable stored link keys start reauth without connecting."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id="00:11:22:33:44:55",
         data={
             "host": "192.0.2.10",
             "port": 2101,
-            CONF_LINK_KEYS_JSON: link_keys_json,
+            CONF_LINK_KEYS_JSON: "not a link key mapping",
             "integration_serial": "123456789012",
         },
     )
@@ -434,7 +438,7 @@ async def test_command_auth_error_starts_reauth_once(
     mock_config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
-    hub = mock_config_entry.runtime_data.hub
+    hub = mock_config_entry.runtime_data.coordinator
     mock_client.client.async_arm_area.side_effect = Elke27AuthError("bad")
 
     with pytest.raises(HomeAssistantError):
@@ -814,16 +818,16 @@ async def test_connect_cancellation_disconnects_client(
 async def test_reconnect_listener_removed_on_unload(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, mock_client: ClientHarness
 ) -> None:
-    """Unload removes the coordinator's reconnect listener from the hub."""
+    """The supervisor reports reconnects straight to the coordinator (D3)."""
     mock_config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
-    hub = mock_config_entry.runtime_data.hub
-    assert len(hub._reconnect_listeners) == 1
+    hub = mock_config_entry.runtime_data.coordinator
+    assert hub.reconnect._on_reconnected == hub._handle_reconnected
 
     assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
     await hass.async_block_till_done()
-    assert hub._reconnect_listeners == []
+    assert hub.reconnect.task is None or hub.reconnect.task.done()
 
 
 async def test_unload_does_not_log_connection_lost(
