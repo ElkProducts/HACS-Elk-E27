@@ -5,17 +5,18 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from homeassistant.const import CONF_HOST, Platform
+from homeassistant.const import Platform
 from homeassistant.core import callback
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import config_validation as cv, issue_registry as ir
 
-from .const import CONF_INTEGRATION_SERIAL, DOMAIN, ISSUE_RECONNECT_FAILED
+from .const import CONF_INTEGRATION_ID, DOMAIN, ISSUE_RECONNECT_FAILED
 from .coordinator import (  # noqa: F401  # PRIMED_DOMAINS/SETUP_RETRY_ERRORS re-exported
     PRIMED_DOMAINS,
     SETUP_RETRY_ERRORS,
     Elke27DataUpdateCoordinator,
 )
-from .identity import async_get_integration_serial
+from .identity import is_valid_integration_id
 from .models import Elke27ConfigEntry, Elke27RuntimeData
 from .panel_mac import mismatch_issue_id
 from .services import (  # noqa: F401  # re-exported; tests and callers import these from the package
@@ -81,16 +82,13 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: Elke27ConfigEntry) -> bool:
     """Set up Elke27 from a config entry."""
-    host = entry.data[CONF_HOST]
-    integration_serial = entry.data.get(CONF_INTEGRATION_SERIAL)
-    entry_data = dict(entry.data)
-    pin_removed = entry_data.pop("pin", None)
-    if not integration_serial:
-        integration_serial = await async_get_integration_serial(hass, host)
-        entry_data[CONF_INTEGRATION_SERIAL] = integration_serial
-        hass.config_entries.async_update_entry(entry, data=entry_data)
-    elif pin_removed is not None:
-        hass.config_entries.async_update_entry(entry, data=entry_data)
+    # E1: the client sn is the flow-generated integration ID. Entries made
+    # before E1 have none (the panel bound their link to the old sn), so they
+    # must be deleted and added again; there is no migration or backfill.
+    if not is_valid_integration_id(entry.data.get(CONF_INTEGRATION_ID)):
+        raise ConfigEntryError(
+            translation_domain=DOMAIN, translation_key="integration_id_invalid"
+        )
     coordinator = Elke27DataUpdateCoordinator(hass, entry)
     # Runs on unload, and when setup fails after this point.
     entry.async_on_unload(coordinator.async_shutdown_client)
