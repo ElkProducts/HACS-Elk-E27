@@ -53,15 +53,17 @@ async def test_runtime_data_holds_only_the_coordinator(
 async def test_identity_unchanged(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, mock_client: ClientHarness
 ) -> None:
-    """Unique IDs keep the pre-D3 <mac>:<domain>:<id> form."""
+    """Unique IDs are <mac>:<id> (ADR-0126 decision 16); sensors use their key."""
     await _setup(hass, mock_config_entry)
     registry = er.async_get(hass)
     unique_ids = {
         e.unique_id
         for e in er.async_entries_for_config_entry(registry, mock_config_entry.entry_id)
     }
-    assert f"{PANEL_MAC}:area:1" in unique_ids
-    assert f"{PANEL_MAC}:zone:1" in unique_ids
+    assert f"{PANEL_MAC}:1" in unique_ids
+    assert f"{PANEL_MAC}:panel_name" in unique_ids
+    assert f"{PANEL_MAC}:panel_ready" in unique_ids
+    assert not any(":area:" in u or ":zone:" in u for u in unique_ids)
     assert all(uid.startswith(f"{PANEL_MAC}:") for uid in unique_ids)
 
 
@@ -77,9 +79,7 @@ async def test_disconnect_is_one_listener_update(
     await hass.async_block_till_done()
     remove()
     assert len(calls) == 1
-    assert hass.states.get("alarm_control_panel.test_panel_house").state == (
-        STATE_UNAVAILABLE
-    )
+    assert hass.states.get("alarm_control_panel.house").state == (STATE_UNAVAILABLE)
 
 
 async def test_stale_snapshot_refreshes_once_per_window(

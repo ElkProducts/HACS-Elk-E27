@@ -8,13 +8,24 @@ from typing import TYPE_CHECKING
 from homeassistant.const import Platform
 from homeassistant.core import callback
 from homeassistant.exceptions import ConfigEntryError
-from homeassistant.helpers import config_validation as cv, issue_registry as ir
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    issue_registry as ir,
+)
 
 from .const import CONF_INTEGRATION_ID, DOMAIN, ISSUE_RECONNECT_FAILED
 from .coordinator import (  # noqa: F401  # PRIMED_DOMAINS/SETUP_RETRY_ERRORS re-exported
     PRIMED_DOMAINS,
     SETUP_RETRY_ERRORS,
     Elke27DataUpdateCoordinator,
+)
+from .entity import (
+    area_has_device,
+    area_id_from_device_identifier,
+    device_info_for_entry,
+    entry_identity_key,
+    snapshot_is_full,
 )
 from .identity import is_valid_integration_id
 from .models import Elke27ConfigEntry, Elke27RuntimeData
@@ -94,6 +105,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: Elke27ConfigEntry) -> bo
     entry.async_on_unload(coordinator.async_shutdown_client)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = Elke27RuntimeData(coordinator=coordinator)
+    # E2: register the panel device first so area devices can link to it.
+    # Area entities link to it by device id (via_device_id) where HA supports it.
+    panel_device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, **device_info_for_entry(coordinator, entry)
+    )
+    coordinator.panel_device_id = panel_device.id
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -108,6 +125,35 @@ async def async_unload_entry(hass: HomeAssistant, entry: Elke27ConfigEntry) -> b
 async def async_remove_entry(hass: HomeAssistant, entry: Elke27ConfigEntry) -> None:
     """Clean up integration state when a config entry is removed."""
     _async_delete_entry_issues(hass, entry)
+
+
+def _entry_area_ids(
+    entry: Elke27ConfigEntry,
+    coordinator: Elke27DataUpdateCoordinator,
+    device_entry: dr.DeviceEntry,
+) -> set[int]:
+    """Return the area numbers this device stands for in this entry."""
+    key = entry_identity_key(coordinator, entry)
+    return {
+        area_id
+        for domain, identifier in device_entry.identifiers
+        if domain == DOMAIN
+        and (area_id := area_id_from_device_identifier(key, identifier)) is not None
+    }
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant,  # noqa: ARG001  # Home Assistant signature
+    entry: Elke27ConfigEntry,
+    device_entry: dr.DeviceEntry,
+) -> bool:
+    """Allow deleting an area device the panel no longer reports (E2)."""
+    coordinator = entry.runtime_data.coordinator
+    area_ids = _entry_area_ids(entry, coordinator, device_entry)
+    snapshot = coordinator.data
+    if not area_ids or not snapshot_is_full(snapshot):
+        return False
+    return not any(area_has_device(snapshot, area_id) for area_id in area_ids)
 
 
 def _duplicate_unique_id_issue_id(entry_id: str) -> str:
