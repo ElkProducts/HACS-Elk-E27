@@ -17,6 +17,7 @@ from elke27_lib.errors import (
     Elke27CryptoError,
     Elke27DisconnectedError,
     Elke27Error,
+    Elke27InvalidArgument,
     Elke27LinkRequiredError,
     Elke27TimeoutError,
     InvalidCredentials,
@@ -52,6 +53,7 @@ from .identity import (
     panel_mac_from_info,
     panel_serial_tier,
 )
+from .migration import legacy_migration_pending, legacy_reauth_data_updates
 from .panel_mac import (
     async_discover_panel_mac,
     async_reauth_mac_fill,
@@ -145,7 +147,9 @@ def _async_try_backfill_config_entry_unique_id(
 class Elke27ConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Elke27."""
 
-    VERSION = 1
+    # 2: 0.2.x identity; 0.1.x (VERSION 1) entries are migrated in place, and an
+    # older release refuses to load a VERSION 2 entry instead of mis-reading it.
+    VERSION = 2
     MINOR_VERSION = 1
 
     def __init__(self) -> None:
@@ -352,6 +356,9 @@ class Elke27ConfigFlow(ConfigFlow, domain=DOMAIN):
         host = self._selected_host
         port = self._selected_port
         if host is None or port is None:
+            _LOGGER.warning(
+                "Elke27 link (%s) not started: entry has no host/port", step_id
+            )
             errors["base"] = "unknown"
             return self.async_show_form(
                 step_id=step_id,
@@ -394,7 +401,15 @@ class Elke27ConfigFlow(ConfigFlow, domain=DOMAIN):
             errors["base"] = "cannot_connect"
         except Elke27LinkRequiredError:
             errors["base"] = "link_required"
-        except Elke27Error:
+        # Kept on purpose: host/port are guarded above (None -> form error) and
+        # come from validated entry data, but the library also raises
+        # Elke27InvalidArgument for an empty access code/passphrase or a
+        # rejected client identity, and no stored 0.1.7 host/port value has been
+        # shown to trigger it. Catching it keeps the form usable (no 500).
+        except (Elke27Error, Elke27InvalidArgument) as err:
+            # Log the exception type only: its message can carry host, port or
+            # panel fields, and none of those belong in the log.
+            _LOGGER.warning("Elke27 link (%s) failed: %s", step_id, type(err).__name__)
             errors["base"] = "unknown"
         finally:
             with contextlib.suppress(OSError, TimeoutError, E27Error, Elke27Error):
@@ -446,6 +461,7 @@ class Elke27ConfigFlow(ConfigFlow, domain=DOMAIN):
                 mac_fill = async_reauth_mac_fill(self.hass, entry, panel_mac)
                 mac_refused = not mac_fill
                 data.update(mac_fill)
+            data.update(legacy_reauth_data_updates(entry, data, stored_mac))
             panel_unique_id = config_entry_unique_id(panel_info)
             if entry.unique_id is None:
                 if (
@@ -473,6 +489,11 @@ class Elke27ConfigFlow(ConfigFlow, domain=DOMAIN):
                 entry,
                 data_updates=data,
                 options={**entry.options, **options},
+                reason=(
+                    "reauth_successful_upgrade"
+                    if legacy_migration_pending(entry)
+                    else "reauth_successful"
+                ),
             )
 
         unique_id = config_entry_unique_id(panel_info)
