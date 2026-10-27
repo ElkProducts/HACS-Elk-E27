@@ -56,6 +56,13 @@ All notable changes to the Elk E27 Alarm Engine Integration. Full release notes 
   the last level, and the reported level is scaled correctly. (#92, #100; fixes #91, #99)
 
 ### Fixed
+- **Arming an area that is not ready now shows a clear message.** When the panel refused
+   an arm or bypass because the area was not ready (a zone open), was in alarm, was
+   already armed, or the zone can not be bypassed, Home Assistant returned a server error
+   and logged an ERROR. It now shows a plain message saying why and logs nothing at ERROR
+   level. Bypasses made by the same call are undone, except when the area turned out to be
+   armed already, where they are kept as before. A duress code is treated as a rejected
+   code.
 - No brief false "off" after turning on or dimming a light; the immediate re-read is gone.
   (#93, fixes #89)
 - An all-zero user code is a validation error, not a server error. (#94, fixes #90)
