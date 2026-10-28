@@ -32,6 +32,7 @@ from custom_components.elke27.config_flow import (
     CONF_PASSPHRASE,
     CONF_RESCAN,
     CONF_SETUP_METHOD,
+    SETUP_METHOD_DISCOVER,
     SETUP_METHOD_MANUAL,
     Elke27ConfigFlow,
 )
@@ -852,6 +853,90 @@ async def test_retry_after_failure_reuses_integration_id(
         for c in flow_client.async_link.await_args_list
     ]
     assert sns == ["314159265358", "314159265358"]
+
+
+def _schema_field_names(schema: probatio.Schema) -> set[str]:
+    return {marker.schema for marker in schema.schema}
+
+
+async def test_discover_empty_scan_redirects_to_manual_host(
+    hass: HomeAssistant, flow_client: Any
+) -> None:
+    """Empty discovery skips credential-only discover and opens manual host setup."""
+    scanner = MagicMock()
+    scanner.async_scan = AsyncMock(return_value=[])
+    with patch(
+        "custom_components.elke27.config_flow.AIOELKDiscovery", return_value=scanner
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_SETUP_METHOD: SETUP_METHOD_DISCOVER}
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manual"
+    assert result["errors"] == {"base": "no_panels_found"}
+    field_names = _schema_field_names(result["data_schema"])
+    assert CONF_HOST in field_names
+    assert CONF_PANEL not in field_names
+    flow_client.async_link.assert_not_awaited()
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_HOST: HOST, CONF_ACCESS_CODE: ACCESS_CODE, CONF_PASSPHRASE: PASSPHRASE},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_discover_rescan_still_empty_redirects_to_manual(
+    hass: HomeAssistant, flow_client: Any
+) -> None:
+    """Empty rescan opens manual setup and linking there can create the entry."""
+    panel_a = SimpleNamespace(
+        panel_host=HOST,
+        port=PORT,
+        panel_name="Kitchen",
+        panel_mac="2c:cf:67:ca:3b:20",
+    )
+    panel_b = SimpleNamespace(
+        panel_host=HOST_2,
+        port=PORT,
+        panel_name="Garage",
+        panel_mac="2c:cf:67:ca:3b:21",
+    )
+    scanner = MagicMock()
+    scanner.async_scan = AsyncMock(side_effect=[[panel_a, panel_b], []])
+    with patch(
+        "custom_components.elke27.config_flow.AIOELKDiscovery", return_value=scanner
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_SETUP_METHOD: SETUP_METHOD_DISCOVER}
+        )
+        assert result["step_id"] == "discover"
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_PANEL: CONF_RESCAN,
+                CONF_ACCESS_CODE: ACCESS_CODE,
+                CONF_PASSPHRASE: PASSPHRASE,
+            },
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manual"
+    assert result["errors"] == {"base": "no_panels_found"}
+    flow_client.async_link.assert_not_awaited()
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_HOST: HOST, CONF_ACCESS_CODE: ACCESS_CODE, CONF_PASSPHRASE: PASSPHRASE},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_HOST] == HOST
+    flow_client.async_link.assert_awaited_once()
 
 
 async def test_discover_no_link_slots(hass: HomeAssistant, flow_client: Any) -> None:
