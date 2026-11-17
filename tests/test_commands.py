@@ -20,8 +20,17 @@ _HAS_DEPS = all(
 if _HAS_DEPS:
     sys.path.insert(0, str(Path(__file__).parents[1]))
 
-    from elke27_lib import AreaState, ArmMode, PanelInfo, PanelSnapshot, ZoneState
+    from elke27_lib import (
+        AreaState,
+        ArmMode,
+        CommandResult,
+        PanelInfo,
+        PanelSnapshot,
+        ZoneState,
+    )
+    from elke27_lib.client import Elke27Client
     from elke27_lib.errors import Elke27PinRequiredError
+    from elke27_lib.types import DelayStateNone
 
     from custom_components.elke27 import coordinator as elke27_hub
     from custom_components.elke27.arming import (
@@ -65,9 +74,46 @@ def _two_area_snapshot() -> PanelSnapshot:
     )
 
 
+_ZONE_STATUS_BYPASSED = frozenset("DEF")
+_ZONE_STATUS_VIOLATED = frozenset("9AB")
+_ZONE_STATUS_KNOWN = frozenset("0123456789ABCDEF")
+
+
+def _snapshot_with_zone_status(snapshot: PanelSnapshot, status: str) -> PanelSnapshot:
+    zones = dict(snapshot.zones)
+    for index, ch in enumerate("".join(status.split()).upper()):
+        zone = zones.get(index + 1)
+        if zone is None or ch not in _ZONE_STATUS_KNOWN:
+            continue
+        if ch in _ZONE_STATUS_BYPASSED:
+            zones[index + 1] = dataclasses.replace(zone, bypassed=True, open=False)
+        else:
+            zones[index + 1] = dataclasses.replace(
+                zone,
+                bypassed=False,
+                open=ch in _ZONE_STATUS_VIOLATED,
+            )
+    return dataclasses.replace(snapshot, zones=MappingProxyType(zones))
+
+
+def _snapshot_with_area_arm_state(
+    snapshot: PanelSnapshot, arm_state: str
+) -> PanelSnapshot:
+    mode = Elke27Client.arm_mode_from_panel_string(arm_state)
+    area = dataclasses.replace(snapshot.areas[1], arm_mode=mode)
+    return dataclasses.replace(
+        snapshot,
+        areas=MappingProxyType({**snapshot.areas, 1: area}),
+    )
+
+
 def _hub() -> Any:
     hass = MagicMock()
     return make_coordinator(hass)
+
+
+def _attach_client(hub: Any, client: Any) -> None:
+    hub._client = client  # noqa: SLF001
 
 
 @unittest.skipUnless(_HAS_DEPS, "homeassistant and elke27 are required")
@@ -266,29 +312,55 @@ class DefinitiveRefusalTest(unittest.TestCase):
 class RefreshAreaStateTest(unittest.IsolatedAsyncioTestCase):
     """Test the status refresh before automatic arming."""
 
-    def _client(self, *, area: Any, zones: Any) -> Any:
-        client = MagicMock()
+    def _client(
+        self,
+        *,
+        area: Any,
+        zones: Any,
+        before: PanelSnapshot | None = None,
+        after: PanelSnapshot | None = None,
+    ) -> Any:
+        from tests.status_snapshot_fake import make_status_read_client  # noqa: PLC0415
 
-        async def _execute(command_key: str, **_params: Any) -> Any:
-            payload = area if command_key == "area_get_status" else zones
-            if isinstance(payload, Exception):
-                raise payload
-            return MagicMock(ok=True, data=payload, error=None)
+        stale = before if before is not None else _two_area_snapshot()
+        if isinstance(area, Exception) or isinstance(zones, Exception):
+            client = MagicMock()
 
-        client.async_execute = AsyncMock(side_effect=_execute)
-        # The client snapshot is stale: elke27 has not dispatched the replies.
-        client.get_snapshot = MagicMock(return_value=_two_area_snapshot())
-        return client
+            async def _execute(command_key: str, **_params: Any) -> Any:
+                payload = area if command_key == "area_get_status" else zones
+                if isinstance(payload, Exception):
+                    raise payload
+                return MagicMock(ok=True, data=payload, error=None)
 
-    async def test_state_comes_from_the_reply_payloads(self) -> None:
-        """Armed area and bypassed zones are read from the replies, not the snapshot."""
+            client.async_execute = AsyncMock(side_effect=_execute)
+            client.get_snapshot = MagicMock(return_value=stale)
+            return client
+
+        post = after if after is not None else stale
+        if after is None:
+            post = stale
+            if isinstance(area, dict) and isinstance(area.get("arm_state"), str):
+                post = _snapshot_with_area_arm_state(post, area["arm_state"])
+            if isinstance(zones, dict) and isinstance(zones.get("status"), str):
+                post = _snapshot_with_zone_status(post, zones["status"])
+
+        return make_status_read_client(
+            before=stale,
+            after=post,
+            area=area,
+            zones=zones,
+            mode="full",
+        )
+
+    async def test_state_comes_from_client_snapshot(self) -> None:
+        """Area and zone status come from get_snapshot after status reads."""
         hub = _hub()
         # Zones 1-2 bypassed (D), 3 normal, 4 violated (9).
         client = self._client(
             area={"area_id": 1, "arm_state": "ARMED_AWAY"},
             zones={"status": "DD19"},
         )
-        hub._client = client  # noqa: SLF001
+        _attach_client(hub, client)
         fresh, armed_reply = await hub.async_refresh_area_state(1)
         assert client.async_execute.await_args_list == [
             unittest.mock.call("area_get_status", area_id=1),
@@ -302,14 +374,15 @@ class RefreshAreaStateTest(unittest.IsolatedAsyncioTestCase):
         assert fresh.zones[3].open is False
         assert fresh.zones[4].open is True
         assert area_faulted_zones(fresh, 1) == []
-        # The stale client snapshot still says otherwise.
-        assert not area_is_armed(client.get_snapshot(), 1)
 
     async def test_disarmed_reply_keeps_area_disarmed(self) -> None:
         """A DISARMED reply is not armed; open zones stay faulted."""
         hub = _hub()
-        hub._client = self._client(  # noqa: SLF001
-            area={"area_id": 1, "arm_state": "DISARMED"}, zones={"status": "99"}
+        _attach_client(
+            hub,
+            self._client(
+                area={"area_id": 1, "arm_state": "DISARMED"}, zones={"status": "99"}
+            ),
         )
         fresh, armed_reply = await hub.async_refresh_area_state(1)
         assert armed_reply is False
@@ -317,29 +390,31 @@ class RefreshAreaStateTest(unittest.IsolatedAsyncioTestCase):
         assert [zone.zone_id for zone in area_faulted_zones(fresh, 1)] == [1, 2]
 
     async def test_disarmed_reply_clears_stale_exit_delay_on_snapshot(self) -> None:
-        """A DISARMED reply without exit-delay fields drops stale pending-arm data."""
+        """Client snapshot after refresh has no stale exit-delay arm pending fields."""
         hub = _hub()
-        stale = dataclasses.replace(
-            _two_area_snapshot(),
+        before = _two_area_snapshot()
+        cleared = dataclasses.replace(
+            before,
             areas=MappingProxyType(
                 {
-                    1: AreaState(
-                        area_id=1,
-                        name="House",
-                        arm_mode=ArmMode.DISARMED,
-                        arm_cmd_mode=ArmMode.ARMED_AWAY,
-                        ee_timer=30,
-                        alarm_zone="",
-                    )
+                    **before.areas,
+                    1: dataclasses.replace(
+                        before.areas[1],
+                        arm_cmd_mode=None,
+                        ee_timer=None,
+                        alarm_zone=None,
+                        delay_state=DelayStateNone(),
+                    ),
                 }
             ),
         )
         client = self._client(
             area={"area_id": 1, "arm_state": "DISARMED"},
             zones={"status": "99"},
+            before=before,
+            after=cleared,
         )
-        client.get_snapshot = MagicMock(return_value=stale)
-        hub._client = client  # noqa: SLF001
+        _attach_client(hub, client)
         fresh, skip = await hub.async_refresh_area_state(1)
         assert skip is False
         area = fresh.areas[1]
@@ -356,7 +431,7 @@ class RefreshAreaStateTest(unittest.IsolatedAsyncioTestCase):
         client = self._client(
             area=Elke27TimeoutError("timeout"), zones=Elke27TimeoutError("timeout")
         )
-        hub._client = client  # noqa: SLF001
+        _attach_client(hub, client)
         fresh, armed_reply = await hub.async_refresh_area_state(1)
         assert armed_reply is None
         assert fresh == _two_area_snapshot()
@@ -383,8 +458,15 @@ class RefreshAreaStateTest(unittest.IsolatedAsyncioTestCase):
 
         client = MagicMock()
         client.async_execute = AsyncMock(side_effect=_execute)
-        client.get_snapshot = MagicMock(return_value=_two_area_snapshot())
-        hub._client = client  # noqa: SLF001
+
+        def _get_snapshot() -> PanelSnapshot:
+            base = _two_area_snapshot()
+            if reads["count"] < 3:
+                return base
+            return _snapshot_with_area_arm_state(base, "ARMED_AWAY")
+
+        client.get_snapshot = MagicMock(side_effect=_get_snapshot)
+        _attach_client(hub, client)
         with (
             patch.object(elke27_hub, "ARM_STATUS_POLL_INTERVAL", 0.01),
             patch.object(elke27_hub, "ARM_STATUS_POLL_TIMEOUT", 1.0),
@@ -393,6 +475,58 @@ class RefreshAreaStateTest(unittest.IsolatedAsyncioTestCase):
         assert armed
         assert area_is_armed(fresh, 1)
         assert reads["count"] == 3
+
+    async def test_area_refresh_reads_snapshot_after_status_requests(self) -> None:
+        """Main area refresh must not call get_snapshot before status reads (M06)."""
+        from tests.status_snapshot_fake import make_status_read_client  # noqa: PLC0415
+
+        hub = _hub()
+        before = _two_area_snapshot()
+        after = _snapshot_with_area_arm_state(before, "ARMED_AWAY")
+        client = make_status_read_client(
+            before=before,
+            after=after,
+            area={"area_id": 1, "arm_state": "ARMED_AWAY"},
+            zones={"status": "99"},
+            strict_snapshot_order=True,
+        )
+        _attach_client(hub, client)
+        fresh, armed_reply = await hub.async_refresh_area_state(1)
+        assert armed_reply is True
+        assert area_is_armed(fresh, 1)
+
+    async def test_zone_fallback_reads_snapshot_after_zone_status(self) -> None:
+        """Zone-only bypass fallback must publish snapshot after zone status (M07)."""
+        from tests.status_snapshot_fake import make_status_read_client  # noqa: PLC0415
+
+        hub = _hub()
+        before = _two_area_snapshot()
+        assert before.zones[1].bypassed is not True
+        after = dataclasses.replace(
+            before,
+            zones=MappingProxyType(
+                {
+                    **before.zones,
+                    1: dataclasses.replace(before.zones[1], bypassed=True, open=False),
+                }
+            ),
+        )
+        client = make_status_read_client(
+            before=before,
+            after=after,
+            area={},
+            zones={"status": "ignored"},
+            mode="zone_only",
+        )
+        client.async_set_zone_bypass = AsyncMock(
+            return_value=CommandResult(route="test", status_refresh_ok=False)
+        )
+        _attach_client(hub, client)
+        assert await hub.async_set_zone_bypass(5, bypassed=True, pin="1234")
+        assert hub.data.zones[1].bypassed is True
+        assert client.async_execute.await_args_list == [
+            unittest.mock.call("zone_get_all_zones_status"),
+        ]
 
     async def test_failed_area_status_reply_is_not_armed_from_cache(self) -> None:
         """Polling does not treat a failed area_get_status as armed from the cache."""
@@ -414,7 +548,7 @@ class RefreshAreaStateTest(unittest.IsolatedAsyncioTestCase):
         client.async_execute = AsyncMock(
             side_effect=TimeoutError("no reply"),
         )
-        hub._client = client  # noqa: SLF001
+        _attach_client(hub, client)
         assert area_armed_from_status_reply(None) is None
         with (
             patch.object(elke27_hub, "ARM_STATUS_POLL_INTERVAL", 0.01),

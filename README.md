@@ -80,8 +80,14 @@ panel. If an item has no name, a fallback such as `Area 1` or `Zone 12` is used.
 
 - **Arm away**, **arm home** (the panel's *Stay* mode) and **disarm**. Each one needs your
   numeric alarm user code, which is entered in the Home Assistant keypad.
-- Arm night and arm vacation are not offered from Home Assistant. If the area is armed in
-  *Night* or *Vacation* mode at a keypad, it shows `armed_night` or `armed_vacation`.
+- **Arm night** is offered from Home Assistant and sends the panel's *Stay Instant* mode when
+  night arm is supported for that area. That requires application firmware **0.0.5.37** or
+  later. An area armed in Stay Instant shows `armed_night`. Arm vacation is still not offered
+  from Home Assistant; if the area is armed in Vacation from a keypad or the Elk app, it shows
+  `armed_vacation`. If application firmware is older than **0.0.5.37**, or the version is
+  unknown, Arm night is not shown. If firmware is new enough but Stay Instant is off for the
+  area, Arm night is shown and the command fails with an error asking you to enable Stay
+  Instant in panel settings.
 - **Arm away may end up as armed home.** If no entry/exit zone opens before the exit delay
   ends, the panel's *auto-stay* switches the area to Stay and it shows `armed_home`. This is
   panel behavior. Check for both `armed_away` and `armed_home` in automations.
@@ -95,9 +101,9 @@ panel. If an item has no name, a fallback such as `Area 1` or `Zone 12` is used.
   example *invalid parameter (check the user code) (error 11004)*. See
   [Panel error messages](#panel-error-messages). The reason and code are also logged as a
   warning.
-- States reported: `disarmed`, `arming` (during the exit delay), `armed_home`, `armed_away`,
-  `armed_night`, `armed_vacation`, `triggered` (alarm active) and `unknown`. There is no
-  `pending` state.
+- States reported: `disarmed`, `arming` (during the exit delay), `pending` (during entry
+  delay; simulator-proven only, not verified on hardware), `armed_home`, `armed_away`,
+  `armed_night`, `armed_vacation`, `triggered` (alarm active) and `unknown`.
 - `unknown` means the panel didn't report the area's arm mode, so Home Assistant can't tell
   whether it is armed. It is never shown as `disarmed`. Check the keypad for the real state.
   Before 0.3.0 this case showed `disarmed`; automations that test for `disarmed` should
@@ -117,6 +123,7 @@ panel. If an item has no name, a fallback such as `Area 1` or `Zone 12` is used.
 |---|---|---|---|---|
 | Arm away | Away | No (open zones: error 11015) | Normal | `armed_away`, or `armed_home` via auto-stay |
 | Arm home | Stay | No (open zones: error 11015) | Normal | `armed_home` |
+| Arm night | Stay Instant | No (open zones: error 11015) | Normal | `armed_night` (application firmware **0.0.5.37** or later) |
 | Arm custom bypass | Away | Yes, open zones in this area only | Normal | `armed_away`, or `armed_home` via auto-stay |
 | `elke27.alarm_arm_automatic` | Away or Stay | Yes, open zones in this area only (0.1.7+) | Both cancelled | `armed_away` / `armed_home` |
 
@@ -202,7 +209,8 @@ panel. If an item has no name, a fallback such as `Area 1` or `Zone 12` is used.
   Assistant first, or stay on 0.2.0.
 - An **Elk E27** panel on your local network that Home Assistant can reach over TCP. Manual
   setup connects on port **2101**.
-  Tested on an E27 with firmware **0.0.6.4** (hardware 0.0.1.4, bootloader 0.0.2.24). Other
+  Tested on an E27 with firmware **2.6.1**, shown on the panel's device page in Home Assistant
+  (the Elk app shows application 0.0.6.4, hardware 0.0.1.4, bootloader 0.0.2.24). Other
   versions may work but haven't been tested.
 - The panel's **linking credentials**: an **access code** and a **passphrase**.
   - Your panel's installer sets these on the panel, so ask your installer for them.
@@ -220,6 +228,7 @@ panel. If an item has no name, a fallback such as `Area 1` or `Zone 12` is used.
 
 | Integration | `elke27` library | Home Assistant tested | Panel tested |
 |---|---|---|---|
+| Unreleased | [0.6.0](https://pypi.org/project/elke27/0.6.0/) | CI: 2026.10.4 (minimum 2026.10.0) | Arm night (Stay Instant) PASS on TEST hardware Nov 14 (earlier tip 91ca8c8); entry delay simulator-only; exit delay not hardware-proven; garage doors waived |
 | 0.3.2 | [0.5.1](https://pypi.org/project/elke27/0.5.1/) | CI: 2026.10.4 (minimum 2026.10.0); hardware: pending | pending (garage doors waived, not hardware-tested) |
 | 0.3.1 | [0.5.0](https://pypi.org/project/elke27/0.5.0/) | CI: 2026.10.4 (minimum 2026.10.0); hardware: pending | pending (garage doors waived, not hardware-tested) |
 | 0.3.0 | [0.4.0](https://pypi.org/project/elke27/0.4.0/) | Hardware: TEST HA Core 2026.10.2; CI: 2026.10.4 (minimum 2026.10.0) | Release-candidate test at `48ee195`: TEST E27 panel, disarmed state verified on hardware; arm, vacation, night and triggered states verified in tests and simulator only; garage doors waived (not hardware-tested) |
@@ -673,7 +682,8 @@ These are by design or limits of the panel.
 - **Arming**
   - A numeric user code is always required to arm or disarm. All-zero codes are rejected and
     leading zeros are dropped.
-  - **Arm night** and **arm vacation** are not offered. The E27 has no Night mode.
+  - **Arm night** is offered when the panel reports night arm support; **arm vacation** is not
+    offered from Home Assistant.
   - Arm away and custom bypass may end as `armed_home` through the panel's auto-stay.
   - **Custom bypass** always arms in away mode, and only bypasses open zones in that area.
   - Disarming an armed area clears all zone bypasses (panel behavior).
@@ -944,7 +954,10 @@ Attach it to bug reports.
 The access code and passphrase are linking credentials from your installer, used once at
 setup. Your user code (PIN) is what you enter to arm, disarm or bypass.
 
-**Why is there no night mode?** The E27 only has Away and Stay.
+**Why don't I see arm night?** Arm night sends Stay Instant and needs application firmware
+**0.0.5.37** or later. If the version is older or unknown, the Arm night action is not shown.
+If firmware is new enough but Stay Instant is off for the area, Arm night appears but the
+command fails with an error asking you to enable Stay Instant in panel settings.
 
 **I armed away, but it shows armed home.** That's the panel's auto-stay: no entry/exit zone
 opened during the exit delay. `elke27.alarm_arm_automatic` cancels auto-stay.
@@ -982,7 +995,9 @@ whole °F, so setpoints you set in °C are rounded.
 ## Glossary
 
 - **Area**: a partition of the panel, armed and disarmed on its own. One alarm panel entity each.
-- **Away / Stay (Home)**: the E27's two arming modes. Stay leaves interior zones unarmed.
+- **Away / Stay (Home)**: the E27's main arming modes. Stay leaves interior zones unarmed.
+- **Stay Instant (Night)**: arm night (`armed_night`) from Home Assistant when application
+  firmware is **0.0.5.37** or later and night arm is supported for the area.
 - **Auto-stay**: the panel switches Away to Stay if no entry/exit zone opens during the exit delay.
 - **Exit delay**: time to leave after arming before the area is fully armed.
 - **Bypass**: tell the panel to ignore a zone until the area is disarmed.

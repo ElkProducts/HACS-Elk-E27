@@ -36,6 +36,7 @@ if _HAS_DEPS:
         Elke27PinRequiredError,
         Elke27TimeoutError,
     )
+    from elke27_lib.types import DelayStateExit, DelayStateNone
     from test_commands import _hub, _snapshot, _two_area_snapshot
     from test_entities import _area_entity
 
@@ -125,7 +126,10 @@ def _area_status_client(
         return MagicMock(ok=True, data=payload, error=None)
 
     client.async_execute = AsyncMock(side_effect=_execute)
-    client.get_snapshot = MagicMock(return_value=snapshot)
+    if callable(snapshot):
+        client.get_snapshot = MagicMock(side_effect=snapshot)
+    else:
+        client.get_snapshot = MagicMock(return_value=snapshot)
     client.async_arm_area = AsyncMock(return_value=_WRITE_OK)
     client.async_disarm_area = AsyncMock(return_value=_WRITE_OK)
     client.async_disconnect = AsyncMock(return_value=None)
@@ -1288,6 +1292,38 @@ class AlarmArmAutomaticServiceTest(unittest.IsolatedAsyncioTestCase):
         hass = MagicMock()
         before = _two_area_snapshot()
         panel = {"exit_delay": True}
+        arming = dataclasses.replace(
+            before,
+            areas=MappingProxyType(
+                {
+                    **before.areas,
+                    1: dataclasses.replace(
+                        before.areas[1],
+                        arm_mode=ArmMode.DISARMED,
+                        arm_cmd_mode=ArmMode.ARMED_AWAY,
+                        ee_timer=20,
+                        alarm_zone="",
+                        delay_state=DelayStateExit(seconds=20),
+                    ),
+                }
+            ),
+        )
+        disarmed = dataclasses.replace(
+            before,
+            areas=MappingProxyType(
+                {
+                    **before.areas,
+                    1: dataclasses.replace(
+                        before.areas[1],
+                        arm_mode=ArmMode.DISARMED,
+                        arm_cmd_mode=None,
+                        ee_timer=None,
+                        alarm_zone=None,
+                        delay_state=DelayStateNone(),
+                    ),
+                }
+            ),
+        )
 
         def _exit_delay_fields() -> dict[str, Any]:
             if not panel["exit_delay"]:
@@ -1298,9 +1334,12 @@ class AlarmArmAutomaticServiceTest(unittest.IsolatedAsyncioTestCase):
                 "alarm_zone": "",
             }
 
+        def _snapshot() -> Any:
+            return arming if panel["exit_delay"] else disarmed
+
         hub = _hub()
         client = _area_status_client(
-            before,
+            _snapshot,
             arm_state="DISARMED",
             area_status_extra=_exit_delay_fields,
         )
@@ -1349,6 +1388,7 @@ class AlarmArmAutomaticServiceTest(unittest.IsolatedAsyncioTestCase):
                         arm_cmd_mode=ArmMode.ARMED_AWAY,
                         ee_timer=30,
                         alarm_zone="",
+                        delay_state=DelayStateExit(seconds=30),
                     ),
                 }
             ),

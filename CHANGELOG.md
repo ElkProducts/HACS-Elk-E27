@@ -3,6 +3,18 @@
 All notable changes to the Elk E27 Alarm Engine Integration. Full release notes are on the
 [Releases page](https://github.com/ElkProducts/HACS-Elk-E27/releases).
 
+## Unreleased
+
+### Added
+- **Arm night** (*Stay Instant*) on the alarm control panel when the panel reports night arm
+  support for the area ([#169](https://github.com/mitchmitchell/HACS-Elk-E27/issues/169)).
+- Entry delay now reports `pending` on the alarm control panel (simulator-only; not verified
+  on hardware).
+
+### Changed
+- Requires [`elke27` 0.6.0](https://github.com/mitchmitchell/elke27/releases/tag/v0.6.0)
+  (was 0.5.1).
+
 ## [0.3.2] - 2026-11-13
 
 ### Upgrade

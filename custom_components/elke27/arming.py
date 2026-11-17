@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from elke27_lib import ArmMode, PanelSnapshot, ZoneState
@@ -76,93 +75,11 @@ _ARMED_MODES = frozenset(
 )
 
 
-_ZONE_STATUS_BYPASSED = frozenset("DEF")
-
-
-_ZONE_STATUS_VIOLATED = frozenset("9AB")
-
-
-_ZONE_STATUS_KNOWN = frozenset("0123456789ABCDEF")
-
-
-def _strict_int(value: object) -> int | None:
-    """Return the value only when it is a true int (bool excluded)."""
-    return value if type(value) is int else None
-
-
 def _arm_mode_from_text(value: Any) -> ArmMode | None:
     """Map a panel arm_state string to an ArmMode with elke27's own mapping (#145)."""
     if not isinstance(value, str):
         return None
     return Elke27Client.arm_mode_from_panel_string(value)
-
-
-def _zone_with_status_char(zone: ZoneState, ch: str) -> ZoneState:
-    """Apply one zone_get_all_zones_status character (elke27's encoding)."""
-    if ch not in _ZONE_STATUS_KNOWN:
-        return zone
-    if ch in _ZONE_STATUS_BYPASSED:
-        return dataclasses.replace(zone, bypassed=True)
-    return dataclasses.replace(zone, bypassed=False, open=ch in _ZONE_STATUS_VIOLATED)
-
-
-def snapshot_with_status(
-    snapshot: PanelSnapshot | None,
-    area_id: int,
-    area_payload: Mapping[str, Any] | None,
-    zones_payload: Mapping[str, Any] | None,
-) -> PanelSnapshot | None:
-    """Overlay area and zone status reply payloads on a snapshot."""
-    if snapshot is None:
-        return None
-    areas = dict(snapshot.areas)
-    zones = dict(snapshot.zones)
-    if area_payload is not None and area_id in areas:
-        area = areas[area_id]
-        updates: dict[str, Any] = {}
-        mode = _arm_mode_from_text(
-            area_payload.get("arm_state") or area_payload.get("armed_state")
-        )
-        if mode is not None:
-            updates["arm_mode"] = mode
-        has_exit_delay_fields = any(
-            key in area_payload for key in ("arm_cmd_state", "ee_timer", "alarm_zone")
-        )
-        if not has_exit_delay_fields:
-            updates["arm_cmd_mode"] = None
-            updates["ee_timer"] = None
-            updates["alarm_zone"] = None
-        else:
-            if "arm_cmd_state" in area_payload:
-                cmd_raw = area_payload.get("arm_cmd_state")
-                updates["arm_cmd_mode"] = (
-                    _arm_mode_from_text(cmd_raw) if isinstance(cmd_raw, str) else None
-                )
-            else:
-                updates["arm_cmd_mode"] = None
-            if "ee_timer" in area_payload:
-                updates["ee_timer"] = _strict_int(area_payload["ee_timer"])
-            else:
-                updates["ee_timer"] = None
-            if "alarm_zone" in area_payload:
-                alarm_zone = area_payload.get("alarm_zone")
-                updates["alarm_zone"] = (
-                    alarm_zone if isinstance(alarm_zone, str) else None
-                )
-            else:
-                updates["alarm_zone"] = None
-        areas[area_id] = dataclasses.replace(area, **updates)
-    status = zones_payload.get("status") if zones_payload is not None else None
-    if isinstance(status, str):
-        for index, ch in enumerate("".join(status.split()).upper()):
-            zone = zones.get(index + 1)
-            if zone is not None:
-                zones[index + 1] = _zone_with_status_char(zone, ch)
-    return dataclasses.replace(
-        snapshot,
-        areas=MappingProxyType(areas),
-        zones=MappingProxyType(zones),
-    )
 
 
 def area_armed_from_status_reply(
@@ -199,7 +116,12 @@ def area_arming_from_status_reply(area_payload: Mapping[str, Any]) -> bool:
     if not isinstance(cmd_raw, str):
         return False
     cmd_mode = _arm_mode_from_text(cmd_raw)
-    if cmd_mode not in (ArmMode.ARMED_AWAY, ArmMode.ARMED_STAY, ArmMode.ARMED_VACATION):
+    if cmd_mode not in (
+        ArmMode.ARMED_AWAY,
+        ArmMode.ARMED_STAY,
+        ArmMode.ARMED_NIGHT,
+        ArmMode.ARMED_VACATION,
+    ):
         return False
     ee_timer = area_payload.get("ee_timer")
     if type(ee_timer) is not int or ee_timer <= 0:
@@ -361,8 +283,7 @@ def _validated_pin(pin: str) -> str:
 
 def _library_arm_mode(mode: Any) -> ArmMode:
     """Map an integration arm request to the elke27 arm mode."""
-    # The E27 has Away and Stay arming only; it has no Night mode.
-    if mode in (ArmMode.ARMED_STAY, ArmMode.ARMED_AWAY):
+    if mode in (ArmMode.ARMED_STAY, ArmMode.ARMED_AWAY, ArmMode.ARMED_NIGHT):
         return ArmMode(mode)
     # Custom bypass: the entity bypasses open zones first, then arms away.
     if isinstance(mode, str) and mode.upper() == "ARMED_CUSTOM_BYPASS":
